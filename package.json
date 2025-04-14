@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "langbase": "^1.1.55",
     "next": "15.3.0",
     "pdfjs-dist": "^3.11.174",
     "react": "^19.0.0",
