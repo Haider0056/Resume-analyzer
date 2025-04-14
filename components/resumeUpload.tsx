@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import * as pdfjs from "pdfjs-dist";
 import { chatWithLangbase } from "@/utils/langbase";
+import * as diff from "diff";
 
 // We need to configure the worker differently in Next.js
 // This avoids the dynamic import issues
@@ -29,13 +30,24 @@ export default function ResumeUploader() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [extractedText, setExtractedText] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [optimizedResume, setOptimizedResume] = useState<string | null>(null);
+  const [diffResult, setDiffResult] = useState<Array<{ added?: boolean; removed?: boolean; value: string }>>([]);
+  const [viewMode, setViewMode] = useState<"original" | "optimized" | "diff">("original");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const descriptionInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize PDF.js worker on client-side
-  React.useEffect(() => {
+  useEffect(() => {
     pdfjsWorker();
   }, []);
+
+  // Generate diff when optimized resume is available
+  useEffect(() => {
+    if (extractedText && optimizedResume) {
+      const differences = diff.diffWords(extractedText, optimizedResume);
+      setDiffResult(differences);
+    }
+  }, [extractedText, optimizedResume]);
 
   // This function extracts text from PDF data
   const extractTextFromPDFData = async (pdfData: string): Promise<string> => {
@@ -146,6 +158,9 @@ export default function ResumeUploader() {
     setPdfFile(null);
     setFileName("");
     setExtractedText("");
+    setOptimizedResume(null);
+    setDiffResult([]);
+    setViewMode("original");
   };
 
   const handleSubmit = async () => {
@@ -163,8 +178,10 @@ export default function ResumeUploader() {
 
     setIsSubmitting(true);
     try {
-      // Now send both the resume text and job description to the langbase function
-      await chatWithLangbase(extractedText, jobDescription);
+      // Send both the resume text and job description to the langbase function
+      const optimizedText = await chatWithLangbase(extractedText, jobDescription);
+      setOptimizedResume(optimizedText);
+      setViewMode("optimized");
       console.log("Data sent to langbase successfully");
     } catch (error) {
       console.error("Error sending data to langbase:", error);
@@ -174,13 +191,121 @@ export default function ResumeUploader() {
     }
   };
 
+  const handleCopyToClipboard = () => {
+    if (optimizedResume) {
+      navigator.clipboard.writeText(optimizedResume)
+        .then(() => {
+          alert("Optimized resume copied to clipboard!");
+        })
+        .catch(err => {
+          console.error("Failed to copy: ", err);
+          alert("Failed to copy resume to clipboard");
+        });
+    }
+  };
+
+  // Function to create a downloadable text file
+  const handleDownloadAsText = () => {
+    if (!optimizedResume) return;
+    
+    try {
+      // Create a blob from the text
+      const blob = new Blob([optimizedResume], { type: 'text/plain' });
+      
+      // Create an object URL for the blob
+      const url = URL.createObjectURL(blob);
+      
+      // Create a download link
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `optimized-${fileName.replace('.pdf', '') || 'resume'}.txt`;
+      
+      // Append to the document, click it, and remove it
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      // Release the object URL
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error creating text file:", error);
+      alert("Failed to download as text file");
+    }
+  };
+
+  const renderDiffView = () => {
+    return (
+      <div className="whitespace-pre-wrap font-mono text-sm">
+        {diffResult.map((part, index) => {
+          // Display added text in green with yellow highlight
+          if (part.added) {
+            return (
+              <span key={index} className="bg-yellow-200 text-green-700 font-bold">
+                {part.value}
+              </span>
+            );
+          }
+          // Display removed text in red with strikethrough
+          if (part.removed) {
+            return (
+              <span key={index} className="text-red-500 line-through">
+                {part.value}
+              </span>
+            );
+          }
+          // Display unchanged text normally
+          return <span key={index}>{part.value}</span>;
+        })}
+      </div>
+    );
+  };
+
+  // Function to format resume text with proper line breaks for display
+  const formatResumeForDisplay = (text: string) => {
+    return text.split('\n').map((line, index) => (
+      <React.Fragment key={index}>
+        {line}
+        <br />
+      </React.Fragment>
+    ));
+  };
+
+  const renderContentView = () => {
+    if (viewMode === "original") {
+      return (
+        <div className="w-full h-96">
+          <iframe
+            src={pdfFile || ""}
+            className="w-full h-full"
+            title="Resume Preview"
+          />
+        </div>
+      );
+    } else if (viewMode === "optimized" && optimizedResume) {
+      return (
+        <div className="p-6 w-full h-96 overflow-auto bg-white">
+          <div className="whitespace-pre-wrap font-mono text-sm">
+            {formatResumeForDisplay(optimizedResume)}
+          </div>
+        </div>
+      );
+    } else if (viewMode === "diff" && diffResult.length > 0) {
+      return (
+        <div className="p-6 w-full h-96 overflow-auto bg-white">
+          {renderDiffView()}
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="flex flex-col items-center min-h-screen w-full bg-gray-50 p-4">
       {(isLoading || isSubmitting) && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
           <div className="bg-white p-4 rounded-lg shadow-xl flex items-center space-x-3">
             <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            <p>{isLoading ? "Processing resume..." : "Analyzing resume with job description..."}</p>
+            <p className="text-black">{isLoading ? "Processing resume..." : "Optimizing resume for job description..."}</p>
           </div>
         </div>
       )}
@@ -234,33 +359,106 @@ export default function ResumeUploader() {
       ) : (
         <div className="w-full max-w-3xl mt-6">
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            {/* Header with filename and actions */}
-            <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-              <h2 className="font-medium text-gray-700 truncate">{fileName}</h2>
+            {/* Header with filename and view toggles */}
+            <div className="p-4 border-b flex flex-wrap justify-between items-center bg-gray-50">
+              <h2 className="font-medium text-gray-700 truncate mb-2 md:mb-0">{fileName}</h2>
               <div className="flex space-x-2">
+                {optimizedResume && (
+                  <div className="flex space-x-1 bg-gray-100 rounded-lg p-1">
+                    <button
+                      onClick={() => setViewMode("original")}
+                      className={`text-xs px-3 py-1 rounded transition-colors ${
+                        viewMode === "original" 
+                          ? "bg-blue-500 text-white" 
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      Original
+                    </button>
+                    <button
+                      onClick={() => setViewMode("optimized")}
+                      className={`text-xs px-3 py-1 rounded transition-colors ${
+                        viewMode === "optimized" 
+                          ? "bg-blue-500 text-white" 
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      Optimized
+                    </button>
+                    <button
+                      onClick={() => setViewMode("diff")}
+                      className={`text-xs px-3 py-1 rounded transition-colors ${
+                        viewMode === "diff" 
+                          ? "bg-blue-500 text-white" 
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      Changes
+                    </button>
+                  </div>
+                )}
                 <button
                   onClick={handleUploadClick}
-                  className="text-sm px-3 py-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 transition-colors"
+                  className="text-xs px-3 py-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 transition-colors"
                 >
                   Upload New
                 </button>
                 <button
                   onClick={resetUpload}
-                  className="text-sm px-3 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
+                  className="text-xs px-3 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
                 >
                   Remove
                 </button>
               </div>
             </div>
 
-            {/* PDF preview */}
-            <div className="w-full h-96">
-              <iframe
-                src={pdfFile}
-                className="w-full h-full"
-                title="Resume Preview"
-              />
-            </div>
+            {/* Content area - PDF/Optimized/Diff view */}
+            {renderContentView()}
+
+            {/* Action buttons for optimized resume */}
+            {optimizedResume && viewMode !== "original" && (
+              <div className="p-4 border-t bg-gray-50 flex justify-end space-x-3">
+                <button
+                  onClick={handleCopyToClipboard}
+                  className="px-3 py-2 bg-blue-100 text-blue-600 rounded hover:bg-blue-200 transition-colors flex items-center"
+                >
+                  <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    className="h-4 w-4 mr-1" 
+                    viewBox="0 0 24 24" 
+                    fill="none"
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  Copy to Clipboard
+                </button>
+                <button
+                  onClick={handleDownloadAsText}
+                  className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors flex items-center"
+                >
+                  <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    className="h-4 w-4 mr-1" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  Download as Text
+                </button>
+              </div>
+            )}
           </div>
           
           {/* Job description input and submit button */}
@@ -274,9 +472,9 @@ export default function ResumeUploader() {
             <button
               className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-4 px-6 rounded-md transition-colors duration-200 disabled:bg-blue-300"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !pdfFile}
             >
-              {isSubmitting ? "Processing..." : "Submit"}
+              {isSubmitting ? "Processing..." : "Optimize Resume"}
             </button>
           </div>
         </div>

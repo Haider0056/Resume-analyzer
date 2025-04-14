@@ -21,7 +21,7 @@ let threadId: string | undefined;
 export const chatWithLangbase = async (message: string,description:string) => {
     try {
         console.log("Sending message to Langbase:", message);
-        const fullMessage=message+description
+        const fullMessage=message+"\n"+description
         plainMessage.push({ role: "user", content: fullMessage });
  
         const response = await langbase.pipe.run({
@@ -47,7 +47,6 @@ export const chatWithLangbase = async (message: string,description:string) => {
                 resolve();
             });
         });
-
         return result;
     } catch (error) {
         console.error("Langbase Chat Error:", error);
